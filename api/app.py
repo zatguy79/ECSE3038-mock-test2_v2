@@ -1,11 +1,10 @@
-# ECSE3038 - Tutorial 6 starter: the readings API from Friday's lecture.
-# Nothing to write in here today. Today's job is to run it on your VM.
-
+# ECSE3038 - Tutorial 6 / Mock Test 2 API
 from datetime import datetime, timezone
+import secrets
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import os
 from dotenv import load_dotenv
@@ -35,16 +34,15 @@ app.add_middleware(
 
 class Device(BaseModel):
     mac: str
-    name: str | None = None
     room: str | None = None
 
 
 class Reading(BaseModel):
     mac: str
-    temp: float
+    temp: float = Field(ge=-40, le=80)
 
-class Settings(BaseModel):
-    temp_limit: float
+class AlarmSettings(BaseModel):
+    max_temp: float
 
 @app.get("/devices")
 def get_devices():
@@ -54,32 +52,43 @@ def get_devices():
 @app.get("/devices/{mac}")
 def get_device(mac: str):
     device = devices.find_one({"mac": mac}, {"_id": 0})
-
     if device is None:
         raise HTTPException(status_code=404, detail="It nuh deh deh. hush.")
-
     return device
 
 
 @app.post("/devices", status_code=201)
 def create_device(device: Device):
     new_device = device.model_dump()
+    new_device["key"] = secrets.token_urlsafe(16)
     try:
         devices.insert_one(new_device)
     except DuplicateKeyError:
         raise HTTPException(status_code=409, detail=f"Device with MAC {device.mac} already exists. hush.")
-    new_device.pop("_id")
+    new_device.pop("_id", None)
     return new_device
 
 
 @app.post("/readings", status_code=201)
-def create_reading(reading: Reading):
-    if devices.find_one({"mac": reading.mac}) is None:
+def create_reading(reading: Reading, x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key")
+    
+    key_owner = devices.find_one({"key": x_api_key})
+    if key_owner is None:
+        raise HTTPException(status_code=401, detail="Invalid X-API-Key")
+
+    device = devices.find_one({"mac": reading.mac})
+    if device is None:
         raise HTTPException(status_code=404, detail="No device with MAC " + reading.mac)
+
+    if key_owner["mac"] != reading.mac:
+        raise HTTPException(status_code=403, detail="API key does not belong to this device")
+
     new_reading = reading.model_dump()
     new_reading["time"] = datetime.now(timezone.utc)
     readings.insert_one(new_reading)
-    new_reading.pop("_id")
+    new_reading.pop("_id", None)
     return new_reading
 
 
@@ -103,25 +112,33 @@ def get_latest_reading(mac: str | None = None):
         raise HTTPException(status_code=404, detail="No readings yet")
     return reading
 
-@app.put("/settings/{mac}")
-def put_settings(mac: str, new: Settings, response: Response):
+
+@app.put("/alarm/{mac}")
+def put_alarm(mac: str, new: AlarmSettings, response: Response):
+    if devices.find_one({"mac": mac}) is None:
+        raise HTTPException(status_code=404, detail="No device with MAC " + mac)
+
     doc = new.model_dump()
     doc["mac"] = mac
     result = settings.replace_one({"mac": mac}, doc, upsert=True)
     if result.upserted_id is not None:
         response.status_code = 201
+    else:
+        response.status_code = 200
+        
     doc.pop("_id", None)
     try:
-        publish.single("ecse3038/" + MQTT_NAME + "/limit", str(new.temp_limit),
+        publish.single("ecse3038/" + MQTT_NAME + "/alarm/max", str(new.max_temp),
                        retain=True, hostname=MQTT_BROKER)
     except Exception as error:
-        print("Could not publish the limit:", error)
+        print("Could not publish the alarm max limit:", error)
     return doc
 
 
-@app.get("/settings/{mac}")
-def get_settings(mac: str):
+@app.get("/alarm/{mac}")
+def get_alarm(mac: str):
     doc = settings.find_one({"mac": mac}, {"_id": 0})
     if doc is None:
         raise HTTPException(status_code=404, detail="No settings for MAC " + mac)
-    return doc
+    return doc[cite: 11]
+
