@@ -46,7 +46,7 @@ class AlarmSettings(BaseModel):
 
 @app.get("/devices")
 def get_devices():
-    return list(devices.find({}, {"_id": 0}))
+    return list(devices.find({}, {"_id": 0, "key": 0}))
 
 
 @app.get("/devices/{mac}")
